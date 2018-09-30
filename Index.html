@@ -1,0 +1,698 @@
+<!DOCTYPE html>
+<!--
+/------------------------------------------------------------------------------\
+| Copyright (C) 2012-2013 Leap Motion, Inc. All rights reserved.               |
+| Leap Motion proprietary and confidential. Not for distribution.              |
+| Use subject to the terms of the Leap Motion SDK Agreement available at       |
+| https://developer.leapmotion.com/sdk_agreement, or another agreement         |
+| between Leap Motion and you, your company or other organization.             |
+\------------------------------------------------------------------------------/
+-->
+
+<!--
+
+See additional libraries, guides, and examples at:
+
+ - https://developer.leapmotion.com/downloads/javascript
+ - https://developer.leapmotion.com/getting-started/javascript
+ - https://developer.leapmotion.com/gallery/tags/javascript
+
+-->
+
+<html>
+<head>
+<meta http-equiv="Content-Type" content="text/html; charset=utf-8">
+<title>Leap Motion Piano Keyboard</title>
+<script src="leap.js"></script>
+<script src="Tone.min.js"></script>
+<script>
+var synth = new Tone.PolySynth(5, Tone.Synth).toMaster();
+var synth2 = new Tone.PolySynth(5, Tone.Synth).toMaster();
+var lastSavedDataTime = 0;
+var currentTime = 0;
+/*synth.triggerAttack("C4");
+window.setTimeout(function() {
+synth.triggerRelease("C4");
+}, 1000);*/
+var leftActive = [];
+var rightActive = [];
+
+
+const sensitivity = 1.12;
+const bendThresholds = [0.75 * sensitivity,
+						0.4 * sensitivity,
+						0.4 * sensitivity,
+						0.4 * sensitivity,
+						0.5 * sensitivity];
+
+// Store frame for motion functions
+var previousFrame = null;
+var paused = false;
+var pauseOnGesture = false;
+
+var noteOffset = 0;
+offsetInterval = 50;
+
+var noteOffset2 = 0; //Left
+
+// Setup Leap loop with frame callback function
+var controllerOptions = {enableGestures: true};
+
+const letters = ["C", "D", "E", "F", "G", "A", "B"];
+
+var savedData = "";
+
+// to use HMD mode:
+// controllerOptions.optimizeHMD = true;
+
+Leap.loop(controllerOptions, function(frame) {
+  if (paused) {
+    return; // Skip this update
+  }
+
+  // Display Frame object data
+  var frameOutput = document.getElementById("frameData");
+
+  var frameString = "Frame ID: " + frame.id  + "<br />"
+                  + "Timestamp: " + frame.timestamp + " &micro;s<br />"
+                  + "Hands: " + frame.hands.length + "<br />"
+                  + "Fingers: " + frame.fingers.length + "<br />"
+                  + "Tools: " + frame.tools.length + "<br />"
+                  + "Gestures: " + frame.gestures.length + "<br />";
+
+  // Frame motion factors
+  if (previousFrame && previousFrame.valid) {
+    var translation = frame.translation(previousFrame);
+    frameString += "Translation: " + vectorToString(translation) + " mm <br />";
+
+    var rotationAxis = frame.rotationAxis(previousFrame);
+    var rotationAngle = frame.rotationAngle(previousFrame);
+    frameString += "Rotation axis: " + vectorToString(rotationAxis, 2) + "<br />";
+    frameString += "Rotation angle: " + rotationAngle.toFixed(2) + " radians<br />";
+
+    var scaleFactor = frame.scaleFactor(previousFrame);
+    frameString += "Scale factor: " + scaleFactor.toFixed(2) + "<br />";
+  }
+  frameOutput.innerHTML = "<div style='width:300px; float:left; padding:5px'>" + frameString + "</div>";
+
+  // Display Hand object data
+  var handOutput = document.getElementById("handData");
+  var handString = "";
+
+  //console.log(frame.hands.length);
+
+  if (frame.hands.length > 0) {
+  	var lHand = false;
+  	var rHand = false;
+    for (var i = 0; i < frame.hands.length; i++) {
+      var hand = frame.hands[i];
+
+      if (hand.type == "left") lHand = true;
+      if (hand.type == "right") rHand = true;
+
+      handString += "<div style='width:300px; float:left; padding:5px'>";
+      handString += "Hand ID: " + hand.id + "<br />";
+      handString += "Type: " + hand.type + " hand" + "<br />";
+      handString += "Direction: " + vectorToString(hand.direction, 2) + "<br />";
+      handString += "Palm position: " + vectorToString(hand.palmPosition) + " mm<br />";
+
+      if (hand.type == "right") {
+	      var previousOffset = noteOffset;
+	      document.getElementById("posSlider").value = hand.palmPosition[0];
+	      noteOffset = Math.round(hand.palmPosition[0] / offsetInterval);
+	      document.getElementById("noteOffset").innerText = "Note Offset: " + String(noteOffset);
+	      if (noteOffset != previousOffset) {
+	      	releaseAll();
+	      }
+	  }
+
+	  if (hand.type == "left") {
+	      var previousOffset2 = noteOffset2;
+	      document.getElementById("posSlider2").value = hand.palmPosition[0];
+	      noteOffset2 = Math.round(hand.palmPosition[0] / offsetInterval);
+	      document.getElementById("noteOffset2").innerText = "Note Offset: " + String(noteOffset2);
+	      if (noteOffset2 != previousOffset2) {
+	      	releaseAll2();
+	      }
+	  }
+      handString += "Grab strength: " + hand.grabStrength + "<br />";
+      handString += "Pinch strength: " + hand.pinchStrength + "<br />";
+      handString += "Confidence: " + hand.confidence + "<br />";
+      handString += "Arm direction: " + vectorToString(hand.arm.direction()) + "<br />";
+      handString += "Arm center: " + vectorToString(hand.arm.center()) + "<br />";
+      handString += "Arm up vector: " + vectorToString(hand.arm.basis[1]) + "<br />";
+
+      // Hand motion factors
+      if (previousFrame && previousFrame.valid) {
+        var translation = hand.translation(previousFrame);
+        handString += "Translation: " + vectorToString(translation) + " mm<br />";
+
+        var rotationAxis = hand.rotationAxis(previousFrame, 2);
+        var rotationAngle = hand.rotationAngle(previousFrame);
+        handString += "Rotation axis: " + vectorToString(rotationAxis) + "<br />";
+        handString += "Rotation angle: " + rotationAngle.toFixed(2) + " radians<br />";
+
+        var scaleFactor = hand.scaleFactor(previousFrame);
+        handString += "Scale factor: " + scaleFactor.toFixed(2) + "<br />";
+      }
+
+      // IDs of pointables associated with this hand
+      if (hand.pointables.length > 0) {
+        var fingerIds = [];
+        for (var j = 0; j < hand.pointables.length; j++) {
+          var pointable = hand.pointables[j];
+            fingerIds.push(pointable.id);
+        }
+        if (fingerIds.length > 0) {
+          handString += "Fingers IDs: " + fingerIds.join(", ") + "<br />";
+        }
+      }
+
+      handString += "</div>";
+    }
+    //console.log("LHAND RHAND" + lHand + " " + rHand);
+    if (!lHand) releaseAll2();
+    if (!rHand) releaseAll();
+  }
+  else {
+    handString += "No hands";
+    //console.log("NO HAND");
+    releaseAll();
+    releaseAll2();
+  }
+  handOutput.innerHTML = handString;
+
+  // Display Pointable (finger and tool) object data
+  var pointableOutput = document.getElementById("pointableData");
+  var pointableString = "";
+  if (frame.pointables.length > 0) {
+    var fingerTypeMap = ["Thumb", "Index finger", "Middle finger", "Ring finger", "Pinky finger"];
+    var boneTypeMap = ["Metacarpal", "Proximal phalanx", "Intermediate phalanx", "Distal phalanx"];
+    for (var i = 0; i < frame.pointables.length; i++) {
+      var pointable = frame.pointables[i];
+
+      pointableString += "<div style='width:250px; float:left; padding:5px'>";
+
+      if (pointable.tool) {
+        pointableString += "Pointable ID: " + pointable.id + "<br />";
+        pointableString += "Classified as a tool <br />";
+        pointableString += "Length: " + pointable.length.toFixed(1) + " mm<br />";
+        pointableString += "Width: "  + pointable.width.toFixed(1) + " mm<br />";
+        pointableString += "Direction: " + vectorToString(pointable.direction, 2) + "<br />";
+        pointableString += "Tip position: " + vectorToString(pointable.tipPosition) + " mm<br />"
+        pointableString += "</div>";
+      }
+      else {
+        pointableString += "Pointable ID: " + pointable.id + "<br />";
+        pointableString += "Type: " + fingerTypeMap[pointable.type] + "<br />";
+        pointableString += "Belongs to hand with ID: " + pointable.handId + "<br />";
+        pointableString += "Classified as a finger<br />";
+        pointableString += "Length: " + pointable.length.toFixed(1) + " mm<br />";
+        pointableString += "Width: "  + pointable.width.toFixed(1) + " mm<br />";
+        pointableString += "Direction: " + vectorToString(pointable.direction, 2) + "<br />";
+        pointableString += "Extended?: "  + pointable.extended + "<br />";
+        if ((hand.id == pointable.handId && hand.type == "right") || (hand.id != pointable.handId && hand.type == "left")) {
+	    	if (fingerTypeMap[pointable.type] == "Thumb") {
+	    		var tElem = document.getElementById("fing1");
+	    		var pState = tElem.checked;
+	    		//console.log(pointable.bones[0].center());
+	    		//console.log(Leap.vec3.dot(pointable.direction, pointable.bones[0].direction()));
+	    		//tElem.checked = Leap.vec3.dot(hand.center, pointable.center) < bendThresholds[0];
+	    		tElem.checked = Leap.vec3.dot(pointable.direction, pointable.bones[0].direction()) < bendThresholds[0];
+	    		//console.log("Right Thumb: " + tElem.checked);
+	    		if (pState != tElem.checked) {
+	    			if (tElem.checked) {
+	    				currentTime = frame.timestamp;
+	    				synth.triggerAttack(getNote("C4", noteOffset + 0));
+	    				rightActive.push(getNote("C4", noteOffset + 0));
+	    			}
+	    			else {
+	    				currentTime = frame.timestamp;
+	    				synth.triggerRelease(getNote("C4", noteOffset + 0));
+	    				if (rightActive.indexOf(getNote("C4", noteOffset + 0)) != -1) {
+	    					rightActive.splice(rightActive.indexOf(getNote("C4", noteOffset + 0)), 1);
+	    				}
+	    			}
+	    		}
+	    	}
+	    	else if (fingerTypeMap[pointable.type] == "Index finger") {
+	    		var tElem = document.getElementById("fing2");
+	    		var pState = tElem.checked;
+	    		tElem.checked = Leap.vec3.dot(hand.direction, pointable.direction) < bendThresholds[1];
+	    		//console.log("Right Index: " + tElem.checked);
+	    		if (pState != tElem.checked) {
+	    			if (tElem.checked) { 
+	    				currentTime = frame.timestamp;
+	    				synth.triggerAttack(getNote("C4", noteOffset + 1));
+	    				rightActive.push(getNote("C4", noteOffset + 1));
+	    			}
+	    			else {
+	    				currentTime = frame.timestamp;
+	    				synth.triggerRelease(getNote("C4", noteOffset + 1));
+	    				if (rightActive.indexOf(getNote("C4", noteOffset + 1)) != -1) {
+	    					rightActive.splice(rightActive.indexOf(getNote("C4", noteOffset + 1)), 1);
+	    				}
+	    			}
+	    		}
+	    	}
+	    	else if (fingerTypeMap[pointable.type] == "Middle finger") {
+	    		var tElem = document.getElementById("fing3");
+	    		var pState = tElem.checked;
+	    		tElem.checked = Leap.vec3.dot(hand.direction, pointable.direction) < bendThresholds[2];
+	    		//console.log("Right Middle: " + tElem.checked);
+				if (pState != tElem.checked) {
+	    			if (tElem.checked) { 
+	    				currentTime = frame.timestamp;
+	    				synth.triggerAttack(getNote("C4", noteOffset + 2));
+	    				rightActive.push(getNote("C4", noteOffset + 2));
+	    			}
+	    			else {
+	    				currentTime = frame.timestamp;
+	    				synth.triggerRelease(getNote("C4", noteOffset + 2));
+	    				if (rightActive.indexOf(getNote("C4", noteOffset + 2)) != -1) {
+	    					rightActive.splice(rightActive.indexOf(getNote("C4", noteOffset + 2)), 1);
+	    				}
+	    			}
+	    		}
+	    	}
+	    	else if (fingerTypeMap[pointable.type] == "Ring finger") {
+	    		var tElem = document.getElementById("fing4");
+	    		var pState = tElem.checked;
+	    		tElem.checked = Leap.vec3.dot(hand.direction, pointable.direction) < bendThresholds[3];
+	    		//console.log("Right Ring: " + tElem.checked);
+	    		if (pState != tElem.checked) {
+	    			if (tElem.checked) { 
+	    				currentTime = frame.timestamp;
+	    				synth.triggerAttack(getNote("C4", noteOffset + 3));
+	    				rightActive.push(getNote("C4", noteOffset + 3));
+	    			}
+	    			else {
+	    				currentTime = frame.timestamp;
+	    				synth.triggerRelease(getNote("C4", noteOffset + 3));
+	    				if (rightActive.indexOf(getNote("C4", noteOffset + 3)) != -1) {
+	    					rightActive.splice(rightActive.indexOf(getNote("C4", noteOffset + 3)), 1);
+	    				}
+	    			}
+	    		}
+	    	}
+	    	else if (fingerTypeMap[pointable.type] == "Pinky finger") {
+	    		var tElem = document.getElementById("fing5");
+	    		var pState = tElem.checked;
+				tElem.checked = Leap.vec3.dot(hand.direction, pointable.direction) < bendThresholds[4];
+				//console.log("Right Pinky: " + tElem.checked);
+				if (pState != tElem.checked) {
+	    			if (tElem.checked) { 
+	    				currentTime = frame.timestamp;
+	    				synth.triggerAttack(getNote("C4", noteOffset + 4));
+	    				rightActive.push(getNote("C4", noteOffset + 4));
+	    			}
+	    			else {
+	    				currentTime = frame.timestamp;
+	    				synth.triggerRelease(getNote("C4", noteOffset + 4));
+	    				if (rightActive.indexOf(getNote("C4", noteOffset + 4)) != -1) {
+	    					rightActive.splice(rightActive.indexOf(getNote("C4", noteOffset + 4)), 1);
+	    				}
+	    			}
+	    		}
+	    	}
+	    }
+	    else {
+	    	if (fingerTypeMap[pointable.type] == "Thumb") {
+	    		var tElem = document.getElementById("fing12");
+	    		var pState = tElem.checked;
+	    		//console.log(pointable.bones[0].center());
+	    		//console.log(Leap.vec3.dot(pointable.direction, pointable.bones[0].direction()));
+	    		//tElem.checked = Leap.vec3.dot(hand.center, pointable.center) < bendThresholds[0];
+	    		tElem.checked = Leap.vec3.dot(pointable.direction, pointable.bones[0].direction()) < bendThresholds[0];
+	    		if (pState != tElem.checked) {
+	    			if (tElem.checked) { 
+	    				currentTime = frame.timestamp;
+	    				synth2.triggerAttack(getNote("G3", noteOffset2 - 0));
+	    				leftActive.push(getNote("C4", noteOffset2 - 0));
+	    			}
+	    			else {
+	    				currentTime = frame.timestamp;
+	    				 synth2.triggerRelease(getNote("G3", noteOffset2 - 0));
+	    				 if (leftActive.indexOf(getNote("C4", noteOffset2 - 0)) != -1) {
+	    					leftActive.splice(leftActive.indexOf(getNote("C4", noteOffset2 - 0)), 1);
+	    				}
+	    			}
+	    		}
+	    	}
+	    	else if (fingerTypeMap[pointable.type] == "Index finger") {
+	    		var tElem = document.getElementById("fing22");
+	    		var pState = tElem.checked;
+	    		tElem.checked = Leap.vec3.dot(hand.direction, pointable.direction) < bendThresholds[1];
+	    		if (pState != tElem.checked) {
+	    			if (tElem.checked) { 
+	    				currentTime = frame.timestamp;
+	    				synth2.triggerAttack(getNote("G3", noteOffset2 - 1));
+	    				leftActive.push(getNote("C4", noteOffset2 - 1));
+	    			}
+	    			else {
+	    				currentTime = frame.timestamp;
+	    				 synth2.triggerRelease(getNote("G3", noteOffset2 - 1));
+	    				 if (leftActive.indexOf(getNote("C4", noteOffset2 - 1)) != -1) {
+	    					leftActive.splice(leftActive.indexOf(getNote("C4", noteOffset2 - 1)), 1);
+	    				}
+	    			}
+	    		}
+	    	}
+	    	else if (fingerTypeMap[pointable.type] == "Middle finger") {
+	    		var tElem = document.getElementById("fing32");
+	    		var pState = tElem.checked;
+	    		tElem.checked = Leap.vec3.dot(hand.direction, pointable.direction) < bendThresholds[2];
+				if (pState != tElem.checked) {
+	    			if (tElem.checked) { 
+	    				currentTime = frame.timestamp;
+	    				synth2.triggerAttack(getNote("G3", noteOffset2 - 2));
+	    				leftActive.push(getNote("C4", noteOffset2 - 2));
+	    			}
+	    			else {
+	    				currentTime = frame.timestamp;
+	    				 synth2.triggerRelease(getNote("G3", noteOffset2 - 2));
+	    				 if (leftActive.indexOf(getNote("C4", noteOffset2 - 2)) != -1) {
+	    					leftActive.splice(leftActive.indexOf(getNote("C4", noteOffset2 - 2)), 1);
+	    				}
+	    			}
+	    		}
+	    	}
+	    	else if (fingerTypeMap[pointable.type] == "Ring finger") {
+	    		var tElem = document.getElementById("fing42");
+	    		var pState = tElem.checked;
+	    		tElem.checked = Leap.vec3.dot(hand.direction, pointable.direction) < bendThresholds[3];
+	    		if (pState != tElem.checked) {
+	    			if (tElem.checked) { 
+	    				currentTime = frame.timestamp;
+	    				synth2.triggerAttack(getNote("G3", noteOffset2 - 3));
+	    				leftActive.push(getNote("C4", noteOffset2 - 3));
+	    			}
+	    			else {
+	    				currentTime = frame.timestamp;
+	    				 synth2.triggerRelease(getNote("G3", noteOffset2 - 3));
+	    				 if (leftActive.indexOf(getNote("C4", noteOffset2 - 3)) != -1) {
+	    					leftActive.splice(leftActive.indexOf(getNote("C4", noteOffset2 - 3)), 1);
+	    				}
+	    			}
+	    		}
+	    	}
+	    	else if (fingerTypeMap[pointable.type] == "Pinky finger") {
+	    		var tElem = document.getElementById("fing52");
+	    		var pState = tElem.checked;
+				tElem.checked = Leap.vec3.dot(hand.direction, pointable.direction) < bendThresholds[4];
+				if (pState != tElem.checked) {
+	    			if (tElem.checked) { 
+	    				currentTime = frame.timestamp;
+	    				synth2.triggerAttack(getNote("G3", noteOffset2 - 4));
+	    				leftActive.push(getNote("C4", noteOffset2 - 4));
+	    			}
+	    			else {
+	    				currentTime = frame.timestamp;
+	    				 synth2.triggerRelease(getNote("G3", noteOffset2 - 4));
+	    				 if (leftActive.indexOf(getNote("C4", noteOffset2 - 4)) != -1) {
+	    					leftActive.splice(rightActive.indexOf(getNote("C4", noteOffset2 - 4)), 1);
+	    				}
+	    			}
+	    		}
+	    	}
+	    }
+
+	    //console.log("HAND: " + hand.type + frame.hands.length);
+
+
+        pointable.bones.forEach( function(bone){
+          pointableString += boneTypeMap[bone.type] + " bone <br />";
+          pointableString += "Center: " + vectorToString(bone.center()) + "<br />";
+          pointableString += "Direction: " + vectorToString(bone.direction()) + "<br />";
+          pointableString += "Up vector: " + vectorToString(bone.basis[1]) + "<br />";
+        });
+        pointableString += "Tip position: " + vectorToString(pointable.tipPosition) + " mm<br />";
+        pointableString += "</div>";
+      }
+    }
+  }
+  else {
+    pointableString += "<div>No pointables</div>";
+  }
+  pointableOutput.innerHTML = pointableString;
+
+  function getNote(noteName, offset) {
+  	var noteLetter = noteName[0];
+  	var noteNumber = noteName.substring(1);
+  	if (letters.indexOf(noteLetter) == -1) {
+  		console.log("NOTE ERROR");
+  		return;
+  	}
+  	var newIndex = letters.indexOf(noteLetter) + offset;
+  	var newNum = parseInt(noteNumber);
+  	while (newIndex < 0) {
+  		newIndex += letters.length;
+  		newNum -= 1;
+  	}
+  	while (newIndex >= letters.length) {
+  		newIndex -= letters.length;
+  		newNum += 1;
+  	}
+  	console.log(letters[newIndex] + String(newNum));
+
+  	var delayTime = currentTime - lastSavedDataTime;
+  	savedData += delayTime + "\n" + letters[newIndex] + String(newNum) + "\n";
+  	lastSavedDataTime = currentTime;
+  	//console.log("A");
+  	return letters[newIndex] + String(newNum);
+  }
+
+  // Display Gesture object data
+  var gestureOutput = document.getElementById("gestureData");
+  var gestureString = "";
+  if (frame.gestures.length > 0) {
+    if (pauseOnGesture) {
+      togglePause();
+    }
+    for (var i = 0; i < frame.gestures.length; i++) {
+      var gesture = frame.gestures[i];
+      gestureString += "Gesture ID: " + gesture.id + ", "
+                    + "type: " + gesture.type + ", "
+                    + "state: " + gesture.state + ", "
+                    + "hand IDs: " + gesture.handIds.join(", ") + ", "
+                    + "pointable IDs: " + gesture.pointableIds.join(", ") + ", "
+                    + "duration: " + gesture.duration + " &micro;s, ";
+
+      switch (gesture.type) {
+        case "circle":
+          gestureString += "center: " + vectorToString(gesture.center) + " mm, "
+                        + "normal: " + vectorToString(gesture.normal, 2) + ", "
+                        + "radius: " + gesture.radius.toFixed(1) + " mm, "
+                        + "progress: " + gesture.progress.toFixed(2) + " rotations";
+          break;
+        case "swipe":
+          gestureString += "start position: " + vectorToString(gesture.startPosition) + " mm, "
+                        + "current position: " + vectorToString(gesture.position) + " mm, "
+                        + "direction: " + vectorToString(gesture.direction, 1) + ", "
+                        + "speed: " + gesture.speed.toFixed(1) + " mm/s";
+          break;
+        case "screenTap":
+        case "keyTap":
+          gestureString += "position: " + vectorToString(gesture.position) + " mm";
+          break;
+        default:
+          gestureString += "unkown gesture type";
+      }
+      gestureString += "<br />";
+    }
+  }
+  else {
+    gestureString += "No gestures";
+  }
+  gestureOutput.innerHTML = gestureString;
+
+  // Store frame for motion functions
+  previousFrame = frame;
+})
+
+function vectorToString(vector, digits) {
+  if (typeof digits === "undefined") {
+    digits = 1;
+  }
+  return "(" + vector[0].toFixed(digits) + ", "
+             + vector[1].toFixed(digits) + ", "
+             + vector[2].toFixed(digits) + ")";
+}
+
+function togglePause() {
+  paused = !paused;
+
+  if (paused) {
+    document.getElementById("pause").innerText = "Resume";
+  } else {
+    document.getElementById("pause").innerText = "Pause";
+  }
+}
+
+function pauseForGestures() {
+  if (document.getElementById("pauseOnGesture").checked) {
+    pauseOnGesture = true;
+  } else {
+    pauseOnGesture = false;
+  }
+}
+
+function releaseAll() {
+	document.getElementById("fing1").checked = false;
+    document.getElementById("fing2").checked = false;
+    document.getElementById("fing3").checked = false;
+    document.getElementById("fing4").checked = false;
+    document.getElementById("fing5").checked = false;
+    rightActive = [];
+    //console.log("R1");
+    synth.releaseAll();
+}
+
+function releaseAll2() {
+	document.getElementById("fing12").checked = false;
+    document.getElementById("fing22").checked = false;
+    document.getElementById("fing32").checked = false;
+    document.getElementById("fing42").checked = false;
+    document.getElementById("fing52").checked = false;
+    leftActive = [];
+    //console.log("R2");
+    synth2.releaseAll();
+}
+
+function download(filename, text) {
+  var element = document.createElement('a');
+  element.setAttribute('href', 'data:text/plain;charset=utf-8,' + encodeURIComponent(text));
+  element.setAttribute('download', filename);
+
+  element.style.display = 'none';
+  document.body.appendChild(element);
+
+  element.click();
+
+  document.body.removeChild(element);
+}
+
+function clearRecording() {
+	savedData = "";
+}
+
+function downloadRecording() {
+	download("RecordedPiano.txt", savedData);
+}
+
+</script>
+</head>
+<body>
+<h1>Leap Motion Piano Keyboard</h1>
+<div id="main">
+<canvas id="pianoCanvas" width="725px" height="200px"></canvas>
+<br/>
+  <button id="pause" onclick="togglePause()">Pause</button>
+  <input type="checkbox" id="pauseOnGesture" onclick="pauseForGestures()">Pause on gesture</input>
+  <input type="range" min="-500" max="500" value="0" class="slider" id="posSlider2"/>
+  <input type="range" min="-500" max="500" value="0" class="slider" id="posSlider"/>
+
+  <p id="noteOffset2">Left Note Offset: ?</p>
+  <p id="noteOffset">Right Note Offset: ?</p>
+  <input type="checkbox" id="fing52" disabled>5</input>
+  <input type="checkbox" id="fing42" disabled>4</input>
+  <input type="checkbox" id="fing32" disabled>3</input>
+  <input type="checkbox" id="fing22" disabled>2</input>
+  <input type="checkbox" id="fing12" disabled>1</input>
+  <br/>
+  <input type="checkbox" id="fing1" disabled>1</input>
+  <input type="checkbox" id="fing2" disabled>2</input>
+  <input type="checkbox" id="fing3" disabled>3</input>
+  <input type="checkbox" id="fing4" disabled>4</input>
+  <input type="checkbox" id="fing5" disabled>5</input>
+
+  <br/>
+  <br/>
+
+  <input type="button" onclick="clearRecording();">Clear Recording</input>
+  <input type="button" onclick="downloadRecording();">Download Recording</input>
+
+  <h3>Frame data:</h3>
+  <div id="frameData"></div>
+  <div style="clear:both;"></div>
+  <h3>Hand data:</h3>
+  <div id="handData"></div>
+  <div style="clear:both;"></div>
+  <h3>Finger and tool data:</h3>
+  <div id="pointableData"></div>
+  <div style="clear:both;"></div>
+  <h3>Gesture data:</h3>
+  <div id="gestureData"></div>
+</div>
+</body>
+<script>
+var ctx = document.getElementById("pianoCanvas").getContext("2d");
+
+
+function getNoteNumber(noteName) { //C2 to C7
+  	var noteLetter = noteName[0];
+  	var noteNumber = noteName.substring(1);
+  	var noteNum = (noteNumber - 2) * 7 + letters.indexOf(noteLetter);
+  	return noteNum;
+}
+
+setInterval(function() {
+
+	//console.log(leftActive + " " + rightActive);
+	ctx.strokeStyle = "black";
+	keyNums = [];
+	for (var k of leftActive) {
+		keyNums.push(getNoteNumber(k));
+	}
+	for (var k of rightActive) {
+		keyNums.push(getNoteNumber(k));
+	}
+	for (var keyIndex = 0; keyIndex < (4 * 7 + 1); keyIndex++) {
+		ctx.fillStyle = (keyNums.includes(keyIndex) ? "red" : "white");
+		ctx.fillRect(keyIndex * 25, 0, 25, 150);
+		ctx.strokeRect(keyIndex * 25, 0, 25, 150);
+	}
+	ctx.fillStyle = "black";
+	for (var keyIndex = 0; keyIndex < (4 * 7 + 1 - 1); keyIndex++) {
+		var octaveIndex = keyIndex % 7;
+		if (octaveIndex == 2 || octaveIndex == 6) continue;
+		ctx.fillRect(12.5 + keyIndex * 25 + 3, 0, 19, 80);
+	}
+
+	ctx.fillStyle = "white";
+	ctx.fillRect(0, 150, 725, 50);
+
+	ctx.fillStyle = "orange"; //Light Orange -- Left
+	ctx.strokeStyle = "orange";
+	var lPos = parseInt(document.getElementById("posSlider2").value) * 25 / offsetInterval + 350 + 12.5;
+	ctx.beginPath();
+	ctx.moveTo(lPos, 175 - 10);
+	ctx.lineTo(lPos + 10 * Math.cos(Math.PI / 6), 175 + 10 * Math.cos(Math.PI / 6));
+	ctx.lineTo(lPos - 10 * Math.cos(Math.PI / 6), 175 + 10 * Math.cos(Math.PI / 6));
+	ctx.fill();
+	ctx.beginPath();
+	ctx.moveTo(lPos, 175);
+	ctx.lineTo(lPos - 25 * 4, 175);
+	ctx.lineTo(lPos - 25 * 4, 165);
+	ctx.stroke();
+
+
+	ctx.fillStyle = "orange"; //Dark Orange -- Right
+	ctx.strokestyle = "orange";
+	var rPos = parseInt(document.getElementById("posSlider").value) * 25 / offsetInterval + 350 + 12.5;
+	ctx.beginPath();
+	ctx.moveTo(rPos, 175 - 10);
+	ctx.lineTo(rPos + 10 * Math.cos(Math.PI / 6), 175 + 10 * Math.cos(Math.PI / 6));
+	ctx.lineTo(rPos - 10 * Math.cos(Math.PI / 6), 175 + 10 * Math.cos(Math.PI / 6));
+	ctx.fill();
+	ctx.beginPath();
+	ctx.moveTo(rPos, 175);
+	ctx.lineTo(rPos + 25 * 4, 175);
+	ctx.lineTo(rPos + 25 * 4, 165);
+	ctx.stroke();
+
+
+}, 1/30);
+
+</script>
+</html>
